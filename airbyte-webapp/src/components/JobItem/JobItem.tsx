@@ -9,7 +9,7 @@ import Status from "core/statuses";
 
 import { useAttemptLink } from "./attemptLinkUtils";
 import ContentWrapper from "./components/ContentWrapper";
-import ErrorDetails from "./components/ErrorDetails";
+import ErrorDetails from "./components/FailureDetails";
 import JobLogs from "./components/JobLogs";
 import { LogsDetails } from "./components/LogsDetails";
 import MainInfo from "./components/MainInfo";
