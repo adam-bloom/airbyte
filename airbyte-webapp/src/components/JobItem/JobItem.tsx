@@ -9,6 +9,7 @@ import Status from "core/statuses";
 
 import { useAttemptLink } from "./attemptLinkUtils";
 import ContentWrapper from "./components/ContentWrapper";
+import ErrorDetails from "./components/ErrorDetails";
 import JobLogs from "./components/JobLogs";
 import { LogsDetails } from "./components/LogsDetails";
 import MainInfo from "./components/MainInfo";
@@ -97,7 +98,10 @@ const JobItem: React.FC<IProps> = ({ shortInfo, ...props }) => {
           >
             {isOpen ? (
               isJobEntity(props) ? (
-                <JobLogs id={jobMeta.id} jobIsFailed={isFailed} />
+                <>
+                  <ErrorDetails attempts={isJobEntity(props) ? props.job.attempts : undefined} />
+                  <JobLogs id={jobMeta.id} jobIsFailed={isFailed} />
+                </>
               ) : (
                 <JobCurrentLogs id={jobMeta.id} jobIsFailed={isFailed} logs={props.jobInfo.logs} />
               )

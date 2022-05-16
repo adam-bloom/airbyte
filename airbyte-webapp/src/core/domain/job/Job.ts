@@ -34,6 +34,7 @@ export interface Failure {
   failureOrigin?: FailureOrigin;
   failureType?: FailureType;
   externalMessage?: string;
+  internalMessage?: string;
   stacktrace?: string;
   retryable?: boolean;
   timestamp: number;
