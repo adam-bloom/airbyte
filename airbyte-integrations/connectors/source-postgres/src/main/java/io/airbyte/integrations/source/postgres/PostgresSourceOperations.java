@@ -13,33 +13,22 @@ import static io.airbyte.cdk.db.jdbc.JdbcConstants.INTERNAL_SCHEMA_NAME;
 import static io.airbyte.cdk.db.jdbc.JdbcConstants.INTERNAL_TABLE_NAME;
 import static io.airbyte.integrations.source.postgres.PostgresType.safeGetJdbcType;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.BinaryNode;
-import com.fasterxml.jackson.databind.node.NullNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.google.common.annotations.VisibleForTesting;
-import io.airbyte.cdk.db.DataTypeUtils;
-import io.airbyte.cdk.db.SourceOperations;
-import io.airbyte.cdk.db.jdbc.AbstractJdbcCompatibleSourceOperations;
-import io.airbyte.cdk.db.jdbc.DateTimeConverter;
-import io.airbyte.commons.jackson.MoreMappers;
-import io.airbyte.commons.json.Jsons;
-import io.airbyte.protocol.models.JsonSchemaPrimitiveUtil.JsonSchemaPrimitive;
-import io.airbyte.protocol.models.JsonSchemaType;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.*;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+
 import org.postgresql.PGStatement;
 import org.postgresql.geometric.PGbox;
 import org.postgresql.geometric.PGcircle;
@@ -52,6 +41,24 @@ import org.postgresql.jdbc.PgResultSetMetaData;
 import org.postgresql.util.PGobject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.BinaryNode;
+import com.fasterxml.jackson.databind.node.NullNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.common.annotations.VisibleForTesting;
+
+import io.airbyte.cdk.db.DataTypeUtils;
+import io.airbyte.cdk.db.SourceOperations;
+import io.airbyte.cdk.db.jdbc.AbstractJdbcCompatibleSourceOperations;
+import io.airbyte.cdk.db.jdbc.DateTimeConverter;
+import io.airbyte.commons.jackson.MoreMappers;
+import io.airbyte.commons.json.Jsons;
+import io.airbyte.protocol.models.JsonSchemaPrimitiveUtil.JsonSchemaPrimitive;
+import io.airbyte.protocol.models.JsonSchemaType;
 
 public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperations<PostgresType>
     implements SourceOperations<ResultSet, PostgresType> {
@@ -77,10 +84,26 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
   }
 
   @Override
+  public JsonNode rowToJson(final ResultSet queryContext) throws SQLException {
+    // the first call communicates with the database, after that the result is
+    // cached.
+    final ResultSetMetaData metadata = queryContext.getMetaData();
+    final int columnCount = metadata.getColumnCount();
+    final ObjectNode jsonNode = (ObjectNode) Jsons.jsonNode(Collections.emptyMap());
+
+    for (int i = 1; i <= columnCount; i++) {
+      // convert to java types that will convert into reasonable json.
+      copyToJsonField(queryContext, i, jsonNode);
+    }
+
+    return jsonNode;
+  }
+
+  @Override
   public void setCursorField(final PreparedStatement preparedStatement,
-                             final int parameterIndex,
-                             final PostgresType cursorFieldType,
-                             final String value)
+      final int parameterIndex,
+      final PostgresType cursorFieldType,
+      final String value)
       throws SQLException {
 
     LOGGER.warn("SGX setCursorField value=" + value + "cursorFieldType=" + cursorFieldType);
@@ -101,50 +124,59 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
       case NUMERIC, DECIMAL -> setDecimal(preparedStatement, parameterIndex, value);
       case CHAR, NCHAR, NVARCHAR, VARCHAR, LONGVARCHAR -> setString(preparedStatement, parameterIndex, value);
       case BINARY, BLOB -> setBinary(preparedStatement, parameterIndex, value);
-      // since cursor are expected to be comparable, handle cursor typing strictly and error on
+      // since cursor are expected to be comparable, handle cursor typing strictly and
+      // error on
       // unrecognized types
       default -> throw new IllegalArgumentException(String.format("%s cannot be used as a cursor.", cursorFieldType));
     }
   }
 
-  private void setTimeWithTimezone(final PreparedStatement preparedStatement, final int parameterIndex, final String value) throws SQLException {
+  private void setTimeWithTimezone(final PreparedStatement preparedStatement, final int parameterIndex,
+      final String value) throws SQLException {
     try {
       preparedStatement.setObject(parameterIndex, OffsetTime.parse(value));
     } catch (final DateTimeParseException e) {
-      // attempt to parse the time w/o timezone. This can be caused by schema created with a different
+      // attempt to parse the time w/o timezone. This can be caused by schema created
+      // with a different
       // version of the connector
       preparedStatement.setObject(parameterIndex, LocalTime.parse(value));
     }
   }
 
-  private void setTimestampWithTimezone(final PreparedStatement preparedStatement, final int parameterIndex, final String value) throws SQLException {
+  private void setTimestampWithTimezone(final PreparedStatement preparedStatement, final int parameterIndex,
+      final String value) throws SQLException {
     try {
       preparedStatement.setObject(parameterIndex, OffsetDateTime.parse(value));
     } catch (final DateTimeParseException e) {
-      // attempt to parse the datetime w/o timezone. This can be caused by schema created with a different
+      // attempt to parse the datetime w/o timezone. This can be caused by schema
+      // created with a different
       // version of the connector
       preparedStatement.setObject(parameterIndex, LocalDateTime.parse(value));
     }
   }
 
   @Override
-  protected void setTimestamp(final PreparedStatement preparedStatement, final int parameterIndex, final String value) throws SQLException {
+  protected void setTimestamp(final PreparedStatement preparedStatement, final int parameterIndex, final String value)
+      throws SQLException {
     try {
       preparedStatement.setObject(parameterIndex, LocalDateTime.parse(value));
     } catch (final DateTimeParseException e) {
-      // attempt to parse the datetime with timezone. This can be caused by schema created with an older
+      // attempt to parse the datetime with timezone. This can be caused by schema
+      // created with an older
       // version of the connector
       preparedStatement.setObject(parameterIndex, OffsetDateTime.parse(value));
     }
   }
 
   @Override
-  protected void setDate(final PreparedStatement preparedStatement, final int parameterIndex, final String value) throws SQLException {
+  protected void setDate(final PreparedStatement preparedStatement, final int parameterIndex, final String value)
+      throws SQLException {
     preparedStatement.setObject(parameterIndex, LocalDate.parse(value));
   }
 
   @Override
-  public void copyToJsonField(final ResultSet resultSet, final int colIndex, final ObjectNode json) throws SQLException {
+  public void copyToJsonField(final ResultSet resultSet, final int colIndex, final ObjectNode json)
+      throws SQLException {
     final PgResultSetMetaData metadata = (PgResultSetMetaData) resultSet.getMetaData();
     final String columnName = metadata.getColumnName(colIndex);
     final ColumnInfo columnInfo = getColumnInfo(colIndex, metadata, columnName);
@@ -155,6 +187,7 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
       switch (columnInfo.columnTypeName) {
         case "bool", "boolean" -> putBoolean(json, columnName, resultSet, colIndex);
         case "bytea" -> json.put(columnName, value);
+        case "jsonb" -> putJsonb(json, columnName, resultSet, colIndex);
         case TIMETZ -> putTimeWithTimezone(json, columnName, resultSet, colIndex);
         case TIMESTAMPTZ -> putTimestampWithTimezone(json, columnName, resultSet, colIndex);
         case "hstore" -> putHstoreAsJson(json, columnName, resultSet, colIndex);
@@ -222,7 +255,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     }
   }
 
-  private void putTimeArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putTimeArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -236,7 +270,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putTimeTzArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putTimeTzArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -250,7 +285,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putTimestampArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putTimestampArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -268,7 +304,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putTimestampTzArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex)
+  private void putTimestampTzArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex)
       throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
@@ -288,7 +325,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putDateArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putDateArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -306,7 +344,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putByteaArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putByteaArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -315,7 +354,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putBitArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putBitArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -329,7 +369,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putBooleanArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putBooleanArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -343,7 +384,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putBigDecimalArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putBigDecimalArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -357,7 +399,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putBigIntArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putBigIntArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -367,7 +410,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putDoubleArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putDoubleArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -376,17 +420,20 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     node.set(columnName, arrayNode);
   }
 
-  private void putMoneyArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putMoneyArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
       final String moneyValue = parseMoneyValue(arrayResultSet.getString(2));
-      arrayNode.add(DataTypeUtils.returnNullIfInvalid(() -> DataTypeUtils.returnNullIfInvalid(() -> Double.valueOf(moneyValue), Double::isFinite)));
+      arrayNode.add(DataTypeUtils.returnNullIfInvalid(
+          () -> DataTypeUtils.returnNullIfInvalid(() -> Double.valueOf(moneyValue), Double::isFinite)));
     }
     node.set(columnName, arrayNode);
   }
 
-  private void putLongArray(final ObjectNode node, final String columnName, final ResultSet resultSet, final int colIndex) throws SQLException {
+  private void putLongArray(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int colIndex) throws SQLException {
     final ArrayNode arrayNode = Jsons.arrayNode();
     final ResultSet arrayResultSet = resultSet.getArray(colIndex).getResultSet();
     while (arrayResultSet.next()) {
@@ -413,7 +460,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
   }
 
   @Override
-  protected void putTimestamp(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index) throws SQLException {
+  protected void putTimestamp(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int index) throws SQLException {
     Timestamp timestampFromResultSet = resultSet.getTimestamp(index);
     String strValue = resultSet.getString(index);
     if (POSITIVE_INFINITY_TIMESTAMP.equals(timestampFromResultSet)) {
@@ -426,13 +474,15 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
   }
 
   @Override
-  protected void putTimeWithTimezone(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index) throws SQLException {
+  protected void putTimeWithTimezone(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int index) throws SQLException {
     final OffsetTime timetz = getObject(resultSet, index, OffsetTime.class);
     node.put(columnName, DateTimeConverter.convertToTimeWithTimezone(timetz));
   }
 
   @Override
-  protected void putTimestampWithTimezone(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index)
+  protected void putTimestampWithTimezone(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int index)
       throws SQLException {
     final OffsetDateTime timestampTz = getObject(resultSet, index, OffsetDateTime.class);
     final String timestampTzVal;
@@ -446,6 +496,17 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     }
 
     node.put(columnName, timestampTzVal);
+  }
+
+  private void putJsonb(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index)
+      throws SQLException {
+    final PGobject object = getObject(resultSet, index, PGobject.class);
+
+    try {
+      node.set(columnName, new ObjectMapper().readTree(object.getValue()));
+    } catch (JsonProcessingException e) {
+      throw new RuntimeException("Could not parse 'jsonb' value:" + e);
+    }
   }
 
   @Override
@@ -476,8 +537,10 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
         case "_date" -> PostgresType.DATE_ARRAY;
         case "_bytea" -> PostgresType.BYTEA_ARRAY;
         case "bool", "boolean" -> PostgresType.BOOLEAN;
-        // BYTEA is variable length binary string with hex output format by default (e.g. "\x6b707a").
-        // It should not be converted to base64 binary string. So it is represented as JDBC VARCHAR.
+        // BYTEA is variable length binary string with hex output format by default
+        // (e.g. "\x6b707a").
+        // It should not be converted to base64 binary string. So it is represented as
+        // JDBC VARCHAR.
         // https://www.postgresql.org/docs/14/datatype-binary.html
         case "bytea" -> PostgresType.VARCHAR;
         case "numeric", "decimal" -> {
@@ -489,6 +552,7 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
         }
         case TIMESTAMPTZ -> PostgresType.TIMESTAMP_WITH_TIMEZONE;
         case TIMETZ -> PostgresType.TIME_WITH_TIMEZONE;
+        case "jsonb" -> PostgresType.JSONB;
         default -> PostgresType.valueOf(field.get(INTERNAL_COLUMN_TYPE).asInt(), POSTGRES_TYPE_DICT);
       };
     } catch (final IllegalArgumentException ex) {
@@ -591,27 +655,30 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
       case TIME_WITH_TIMEZONE -> JsonSchemaType.STRING_TIME_WITH_TIMEZONE;
       case TIMESTAMP -> JsonSchemaType.STRING_TIMESTAMP_WITHOUT_TIMEZONE;
       case TIMESTAMP_WITH_TIMEZONE -> JsonSchemaType.STRING_TIMESTAMP_WITH_TIMEZONE;
+      case JSONB -> JsonSchemaType.OBJECT;
       default -> JsonSchemaType.STRING;
     };
   }
 
   @Override
-  protected void putBoolean(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index) throws SQLException {
+  protected void putBoolean(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index)
+      throws SQLException {
     node.put(columnName, resultSet.getString(index).equalsIgnoreCase("t"));
   }
 
   protected <T extends PGobject> void putObject(final ObjectNode node,
-                                                final String columnName,
-                                                final ResultSet resultSet,
-                                                final int index,
-                                                final Class<T> clazz)
+      final String columnName,
+      final ResultSet resultSet,
+      final int index,
+      final Class<T> clazz)
       throws SQLException {
     final T object = getObject(resultSet, index, clazz);
     node.put(columnName, object.getValue());
   }
 
   @Override
-  protected void putBigDecimal(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index) {
+  protected void putBigDecimal(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int index) {
     final BigDecimal bigDecimal = DataTypeUtils.returnNullIfInvalid(() -> resultSet.getBigDecimal(index));
     if (bigDecimal != null) {
       node.put(columnName, bigDecimal);
@@ -623,7 +690,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
   }
 
   @Override
-  protected void putDouble(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index) throws SQLException {
+  protected void putDouble(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index)
+      throws SQLException {
     if (resultSet.getMetaData().getColumnTypeName(index).equals("money")) {
       putMoney(node, columnName, resultSet, index);
     } else {
@@ -631,12 +699,14 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     }
   }
 
-  private void putMoney(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index) throws SQLException {
+  private void putMoney(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index)
+      throws SQLException {
     final String moneyValue = parseMoneyValue(resultSet.getString(index));
     node.put(columnName, DataTypeUtils.returnNullIfInvalid(() -> Double.valueOf(moneyValue), Double::isFinite));
   }
 
-  private void putHstoreAsJson(final ObjectNode node, final String columnName, final ResultSet resultSet, final int index)
+  private void putHstoreAsJson(final ObjectNode node, final String columnName, final ResultSet resultSet,
+      final int index)
       throws SQLException {
     final var data = resultSet.getObject(index);
     try {
@@ -647,7 +717,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
   }
 
   /**
-   * @return monetary value in numbers without the currency symbol or thousands separators.
+   * @return monetary value in numbers without the currency symbol or thousands
+   *         separators.
    */
   @VisibleForTesting
   static String parseMoneyValue(final String moneyString) {
@@ -659,7 +730,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
     return PostgresUtils.ALLOWED_CURSOR_TYPES.contains(type);
   }
 
-  private ColumnInfo getColumnInfo(final int colIndex, final PgResultSetMetaData metadata, final String columnName) throws SQLException {
+  private ColumnInfo getColumnInfo(final int colIndex, final PgResultSetMetaData metadata, final String columnName)
+      throws SQLException {
     final String tableName = metadata.getBaseTableName(colIndex);
     final String schemaName = metadata.getBaseSchemaName(colIndex);
     final String key = schemaName + tableName;

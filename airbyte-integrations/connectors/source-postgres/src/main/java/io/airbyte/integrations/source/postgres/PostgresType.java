@@ -70,7 +70,8 @@ public enum PostgresType implements SQLType {
   OID_ARRAY(Types.ARRAY),
   FLOAT4_ARRAY(Types.ARRAY),
   FLOAT8_ARRAY(Types.ARRAY),
-  BYTEA_ARRAY(Types.ARRAY);
+  BYTEA_ARRAY(Types.ARRAY),
+  JSONB(Types.JAVA_OBJECT);
 
   /**
    * The Integer value for the JDBCType. It maps to a value in {@code Types.java}
@@ -97,7 +98,8 @@ public enum PostgresType implements SQLType {
   /**
    * Returns the name of the vendor that supports this data type.
    *
-   * @return The name of the vendor for this data type which is {@literal java.sql} for JDBCType.
+   * @return The name of the vendor for this data type which is
+   *         {@literal java.sql} for JDBCType.
    */
   public String getVendor() {
     return "java.sql";
@@ -106,7 +108,8 @@ public enum PostgresType implements SQLType {
   /**
    * Returns the vendor specific type number for the data type.
    *
-   * @return An Integer representing the data type. For {@code JDBCType}, the value will be the same
+   * @return An Integer representing the data type. For {@code JDBCType}, the
+   *         value will be the same
    *         value as in {@code Types} for the data type.
    */
   public Integer getVendorTypeNumber() {
@@ -123,12 +126,14 @@ public enum PostgresType implements SQLType {
   }
 
   /**
-   * Returns the {@code JDBCType} that corresponds to the specified {@code Types} value
+   * Returns the {@code JDBCType} that corresponds to the specified {@code Types}
+   * value
    *
    * @param type {@code Types} value
    * @return The {@code JDBCType} constant
-   * @throws IllegalArgumentException if this enum type has no constant with the specified
-   *         {@code Types} value
+   * @throws IllegalArgumentException if this enum type has no constant with the
+   *                                  specified
+   *                                  {@code Types} value
    * @see Types
    */
   public static PostgresType valueOf(final int type, final Map<Integer, PostgresType> postgresTypeMap) {
@@ -139,7 +144,8 @@ public enum PostgresType implements SQLType {
         + "Types.java value.");
   }
 
-  public static PostgresType safeGetJdbcType(final int columnTypeInt, final Map<Integer, PostgresType> postgresTypeMap) {
+  public static PostgresType safeGetJdbcType(final int columnTypeInt,
+      final Map<Integer, PostgresType> postgresTypeMap) {
     try {
       return PostgresType.valueOf(columnTypeInt, postgresTypeMap);
     } catch (final Exception e) {

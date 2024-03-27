@@ -13,12 +13,6 @@ import static org.apache.kafka.connect.data.Schema.OPTIONAL_FLOAT64_SCHEMA;
 import static org.apache.kafka.connect.data.Schema.OPTIONAL_INT64_SCHEMA;
 import static org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA;
 
-import io.airbyte.cdk.db.jdbc.DateTimeConverter;
-import io.airbyte.cdk.integrations.debezium.internals.DebeziumConverterUtils;
-import io.debezium.connector.postgresql.PostgresValueConverter;
-import io.debezium.spi.converter.CustomConverter;
-import io.debezium.spi.converter.RelationalColumn;
-import io.debezium.time.Conversions;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -35,6 +29,7 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+
 import org.apache.commons.codec.binary.Hex;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.postgresql.jdbc.PgArray;
@@ -42,27 +37,42 @@ import org.postgresql.util.PGInterval;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.airbyte.cdk.db.jdbc.DateTimeConverter;
+import io.airbyte.cdk.integrations.debezium.internals.DebeziumConverterUtils;
+import io.debezium.connector.postgresql.PostgresValueConverter;
+import io.debezium.spi.converter.CustomConverter;
+import io.debezium.spi.converter.RelationalColumn;
+import io.debezium.time.Conversions;
+
 public class PostgresConverter implements CustomConverter<SchemaBuilder, RelationalColumn> {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(PostgresConverter.class);
 
-  private final String[] DATE_TYPES = {"DATE", "TIME", "TIMETZ", "INTERVAL", "TIMESTAMP", "TIMESTAMPTZ"};
-  private final String[] BIT_TYPES = {"BIT", "VARBIT"};
-  private final String[] MONEY_ITEM_TYPE = {"MONEY"};
-  private final String[] GEOMETRICS_TYPES = {"BOX", "CIRCLE", "LINE", "LSEG", "POINT", "POLYGON", "PATH"};
-  private final String[] TEXT_TYPES =
-      {"VARCHAR", "VARBINARY", "BLOB", "TEXT", "LONGTEXT", "TINYTEXT", "MEDIUMTEXT", "INVENTORY_ITEM", "TSVECTOR", "TSQUERY", "PG_LSN"};
-  private final String[] NUMERIC_TYPES = {"NUMERIC", "DECIMAL"};
-  private final String[] ARRAY_TYPES = {"_NAME", "_NUMERIC", "_BYTEA", "_MONEY", "_BIT", "_DATE", "_TIME", "_TIMETZ", "_TIMESTAMP", "_TIMESTAMPTZ"};
+  private final String[] DATE_TYPES = { "DATE", "TIME", "TIMETZ", "INTERVAL", "TIMESTAMP", "TIMESTAMPTZ" };
+  private final String[] BIT_TYPES = { "BIT", "VARBIT" };
+  private final String[] MONEY_ITEM_TYPE = { "MONEY" };
+  private final String[] GEOMETRICS_TYPES = { "BOX", "CIRCLE", "LINE", "LSEG", "POINT", "POLYGON", "PATH" };
+  private final String[] TEXT_TYPES = { "VARCHAR", "VARBINARY", "BLOB", "TEXT", "LONGTEXT", "TINYTEXT", "MEDIUMTEXT",
+      "INVENTORY_ITEM", "TSVECTOR", "TSQUERY", "PG_LSN" };
+  private final String[] NUMERIC_TYPES = { "NUMERIC", "DECIMAL" };
+  private final String[] ARRAY_TYPES = { "_NAME", "_NUMERIC", "_BYTEA", "_MONEY", "_BIT", "_DATE", "_TIME", "_TIMETZ",
+      "_TIMESTAMP", "_TIMESTAMPTZ" };
   private final String BYTEA_TYPE = "BYTEA";
+  private final String JSONB_TYPE = "JSONB";
+  private final ObjectMapper objectMapper = new ObjectMapper();
 
   // Debezium is manually setting the variable scale decimal length (precision)
-  // of numeric_array columns to 131089 if not specified. e.g: NUMERIC vs NUMERIC(38,0)
+  // of numeric_array columns to 131089 if not specified. e.g: NUMERIC vs
+  // NUMERIC(38,0)
   // https://github.com/debezium/debezium/blob/main/debezium-connector-postgres/src/main/java/io/debezium/connector/postgresql/PostgresValueConverter.java#L113
   private final int VARIABLE_SCALE_DECIMAL_LENGTH = 131089;
 
   @Override
-  public void configure(final Properties props) {}
+  public void configure(final Properties props) {
+  }
 
   @Override
   public void converterFor(final RelationalColumn field, final ConverterRegistration<SchemaBuilder> registration) {
@@ -80,7 +90,22 @@ public class PostgresConverter implements CustomConverter<SchemaBuilder, Relatio
       registerNumber(field, registration);
     } else if (Arrays.stream(ARRAY_TYPES).anyMatch(s -> s.equalsIgnoreCase(field.typeName()))) {
       registerArray(field, registration);
+    } else if (JSONB_TYPE.equalsIgnoreCase(field.typeName())) {
+      registerJsonb(field, registration);
     }
+  }
+
+  private void registerJsonb(RelationalColumn field, ConverterRegistration<SchemaBuilder> registration) {
+    registration.register(SchemaBuilder.string().optional(), x -> {
+      if (x == null) {
+        return DebeziumConverterUtils.convertDefaultValue(field);
+      }
+      try {
+        return objectMapper.readTree(x.toString()).toString();
+      } catch (JsonProcessingException e) {
+        throw new RuntimeException("Could not parse 'jsonb' value:" + e);
+      }
+    });
   }
 
   private void registerArray(final RelationalColumn field, final ConverterRegistration<SchemaBuilder> registration) {
@@ -96,7 +121,8 @@ public class PostgresConverter implements CustomConverter<SchemaBuilder, Relatio
         }
       }
       case "_MONEY" -> SchemaBuilder.array(OPTIONAL_FLOAT64_SCHEMA);
-      case "_NAME", "_DATE", "_TIME", "_TIMESTAMP", "_TIMESTAMPTZ", "_TIMETZ", "_BYTEA" -> SchemaBuilder.array(OPTIONAL_STRING_SCHEMA);
+      case "_NAME", "_DATE", "_TIME", "_TIMESTAMP", "_TIMESTAMPTZ", "_TIMETZ", "_BYTEA" ->
+        SchemaBuilder.array(OPTIONAL_STRING_SCHEMA);
       case "_BIT" -> SchemaBuilder.array(OPTIONAL_BOOLEAN_SCHEMA);
       default -> SchemaBuilder.array(OPTIONAL_STRING_SCHEMA);
     };
@@ -111,19 +137,28 @@ public class PostgresConverter implements CustomConverter<SchemaBuilder, Relatio
       // Bad solution
       // We applied a solution like this for several reasons:
       // 1. Regarding #13608, CDC and nor-CDC data output format should be the same.
-      // 2. In the non-CDC mode 'decimal' and 'numeric' values are put to JSON node as BigDecimal value.
-      // According to Jackson Object mapper configuration, all trailing zeros are omitted and
-      // numbers with decimal places are deserialized with exponent. (e.g. 1234567890.1234567 would
+      // 2. In the non-CDC mode 'decimal' and 'numeric' values are put to JSON node as
+      // BigDecimal value.
+      // According to Jackson Object mapper configuration, all trailing zeros are
+      // omitted and
+      // numbers with decimal places are deserialized with exponent. (e.g.
+      // 1234567890.1234567 would
       // be deserialized as 1.2345678901234567E9).
-      // 3. In the CDC mode 'decimal' and 'numeric' values are deserialized as a regular number (e.g.
-      // 1234567890.1234567 would be deserialized as 1234567890.1234567). Numbers without
-      // decimal places (e.g 1, 24, 354) are represented with trailing zero (e.g 1.0, 24.0, 354.0).
+      // 3. In the CDC mode 'decimal' and 'numeric' values are deserialized as a
+      // regular number (e.g.
+      // 1234567890.1234567 would be deserialized as 1234567890.1234567). Numbers
+      // without
+      // decimal places (e.g 1, 24, 354) are represented with trailing zero (e.g 1.0,
+      // 24.0, 354.0).
       // One of solution to align deserialization for these 2 modes is setting
-      // DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS as true for ObjectMapper. But this breaks
+      // DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS as true for ObjectMapper.
+      // But this breaks
       // deserialization for other data-types.
-      // A worked solution was to keep deserialization for non-CDC mode as it is and change it for CDC
+      // A worked solution was to keep deserialization for non-CDC mode as it is and
+      // change it for CDC
       // one.
-      // The code below strips trailing zeros for integer numbers and represents number with exponent
+      // The code below strips trailing zeros for integer numbers and represents
+      // number with exponent
       // if this number has decimals point.
       final double doubleValue = Double.parseDouble(x.toString());
       final String valueWithTruncatedZero = BigDecimal.valueOf(doubleValue).stripTrailingZeros().toPlainString();
@@ -165,7 +200,8 @@ public class PostgresConverter implements CustomConverter<SchemaBuilder, Relatio
         // PgArray.getArray() trying to convert to Double instead of PgMoney
         // due to incorrect type mapping in the postgres driver
         // https://github.com/pgjdbc/pgjdbc/blob/d5ed52ef391670e83ae5265af2f7301c615ce4ca/pgjdbc/src/main/java/org/postgresql/jdbc/TypeInfoCache.java#L88
-        // and throws an exception, so a custom implementation of converting to String is used to get the
+        // and throws an exception, so a custom implementation of converting to String
+        // is used to get the
         // value as is
         final String nativeMoneyValue = ((PgArray) x).toString();
         final String substringM = Objects.requireNonNull(nativeMoneyValue).substring(1, nativeMoneyValue.length() - 1);
@@ -173,7 +209,8 @@ public class PostgresConverter implements CustomConverter<SchemaBuilder, Relatio
         final String regex = "\\" + currency;
         final List<String> myListM = new ArrayList<>(Arrays.asList(substringM.split(regex)));
         return myListM.stream()
-            // since the separator is the currency sign, all extra characters must be removed except for numbers
+            // since the separator is the currency sign, all extra characters must be
+            // removed except for numbers
             // and dots
             .map(val -> val.replaceAll("[^\\d.]", ""))
             .filter(money -> !money.isEmpty())
@@ -192,13 +229,17 @@ public class PostgresConverter implements CustomConverter<SchemaBuilder, Relatio
           }
         }).collect(Collectors.toList());
       case "_TIME":
-        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToTime(value)).collect(Collectors.toList());
+        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToTime(value))
+            .collect(Collectors.toList());
       case "_DATE":
-        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToDate(value)).collect(Collectors.toList());
+        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToDate(value))
+            .collect(Collectors.toList());
       case "_TIMESTAMP":
-        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToTimestamp(value)).collect(Collectors.toList());
+        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToTimestamp(value))
+            .collect(Collectors.toList());
       case "_TIMESTAMPTZ":
-        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToTimestampWithTimezone(value)).collect(Collectors.toList());
+        return Arrays.stream(getArray(x)).map(value -> value == null ? null : convertToTimestampWithTimezone(value))
+            .collect(Collectors.toList());
       case "_TIMETZ":
 
         final List<String> timetzArr = new ArrayList<>();
@@ -217,7 +258,8 @@ public class PostgresConverter implements CustomConverter<SchemaBuilder, Relatio
         });
         return timetzArr;
       case "_BYTEA":
-        return Arrays.stream(getArray(x)).map(value -> Base64.getEncoder().encodeToString((byte[]) value)).collect(Collectors.toList());
+        return Arrays.stream(getArray(x)).map(value -> Base64.getEncoder().encodeToString((byte[]) value))
+            .collect(Collectors.toList());
       case "_BIT":
         return Arrays.stream(getArray(x)).map(value -> (Boolean) value).collect(Collectors.toList());
       case "_NAME":
