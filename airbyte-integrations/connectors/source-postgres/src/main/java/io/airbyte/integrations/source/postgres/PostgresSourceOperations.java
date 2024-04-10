@@ -655,7 +655,8 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
       case TIME_WITH_TIMEZONE -> JsonSchemaType.STRING_TIME_WITH_TIMEZONE;
       case TIMESTAMP -> JsonSchemaType.STRING_TIMESTAMP_WITHOUT_TIMEZONE;
       case TIMESTAMP_WITH_TIMEZONE -> JsonSchemaType.STRING_TIMESTAMP_WITH_TIMEZONE;
-      case JSONB -> JsonSchemaType.OBJECT;
+      case JSONB -> PostgresJsonSchemaType
+          .UNKNOWN();
       default -> JsonSchemaType.STRING;
     };
   }
