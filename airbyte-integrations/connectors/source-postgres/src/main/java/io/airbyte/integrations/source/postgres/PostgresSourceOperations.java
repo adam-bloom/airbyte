@@ -84,22 +84,6 @@ public class PostgresSourceOperations extends AbstractJdbcCompatibleSourceOperat
   }
 
   @Override
-  public JsonNode rowToJson(final ResultSet queryContext) throws SQLException {
-    // the first call communicates with the database, after that the result is
-    // cached.
-    final ResultSetMetaData metadata = queryContext.getMetaData();
-    final int columnCount = metadata.getColumnCount();
-    final ObjectNode jsonNode = (ObjectNode) Jsons.jsonNode(Collections.emptyMap());
-
-    for (int i = 1; i <= columnCount; i++) {
-      // convert to java types that will convert into reasonable json.
-      copyToJsonField(queryContext, i, jsonNode);
-    }
-
-    return jsonNode;
-  }
-
-  @Override
   public void setCursorField(final PreparedStatement preparedStatement,
       final int parameterIndex,
       final PostgresType cursorFieldType,

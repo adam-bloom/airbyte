@@ -31,6 +31,10 @@ dependencyResolutionManagement {
     repositories {
         // # Gradle looks for dependency artifacts in repositories listed in 'repositories' blocks in descending order.
 
+        flatDir {
+            dirs '/Users/adambloom/Development/airbyte-protocol/protocol-models/build/libs'
+        }
+
         // ## Prefer repos controlled by Airbyte.
 
         maven {

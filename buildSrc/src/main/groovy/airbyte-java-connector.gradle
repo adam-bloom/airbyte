@@ -116,7 +116,8 @@ class AirbyteJavaConnectorExtension {
                 implementation "org.slf4j:log4j-over-slf4j:2.0.9"
 
                 // Airbyte dependencies.
-                implementation "io.airbyte.airbyte-protocol:protocol-models:0.3.6"
+                implementation "io.airbyte.airbyte-protocol:protocol-models:0.9.2"
+                // implementation files('/Users/adambloom/Development/airbyte-protocol/protocol-models/build/libs/io.airbyte.airbyte-protocol-protocol-models-0.9.1.jar')
 
                 // CDK dependencies.
                 PRE_V019_IMPLEMENTATION.each {
